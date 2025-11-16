@@ -51,6 +51,14 @@
 #define DYPTBUF_RECV        0x780   // 0x780 - 0xf7f
 #define DYPTBUF_RECVDATA    0x786
 
+#define IRQ_GPIO4           0
+#define IRQ_TIMERA          1
+#define IRQ_TIMERC          2
+
+volatile uint8_t *const mfp_aeb = (uint8_t *)0xe88003;
+volatile uint8_t *const mfp_ierb = (uint8_t *)0xe88009;
+volatile uint8_t *const mfp_imrb = (uint8_t *)0xe88015;
+
 typedef void (*rcvhandler_t)(int len, uint8_t *buff, uint32_t flag);
 
 //****************************************************************************
@@ -65,7 +73,7 @@ struct regdata {
   char ifname[4];   // ネットワークインターフェース名
 
   int removable;    // 0:CONFIG.SYSで登録された 1:Human68k起動後に登録された
-  int ivect;        // 割り込みベクタ番号
+  int irqtype;      // 割り込み種別
   int trapno;       // 使用するtrap番号 (0-7)
   int target;       // SCSIターゲットID
   int nproto;       // このインターフェースを使用するプロトコル数
@@ -74,13 +82,21 @@ struct regdata {
   .trapno = 0,
   .nproto = 0,
 
+  .irqtype = IRQ_GPIO4,
+
   .target = -1,
 };
 
 struct regdata *regp = &regdata;
 extern struct dos_dev_header devheader;
 extern void trap_entry(void);
-extern void inthandler_asm(void);
+extern void inthandler_gpio4_asm(void);
+extern void inthandler_timer_a_asm(void);
+extern void inthandler_timer_c_asm(void);
+
+uint16_t irq_count;
+uint16_t irq_count_ini = 4;
+void *old_timer_c;
 
 //****************************************************************************
 // Static variables
@@ -460,8 +476,30 @@ static int etherinit(void)
 
   // 割り込みベクタを設定する
   regp->oldtrap = _dos_intvcs(0x20 + regp->trapno, trap_entry);
-  //regp->oldivaddr = _dos_intvcs(regp->ivect, inthandler_asm);
-  _iocs_vdispst(inthandler_asm, 0, 4);
+  irq_count = irq_count_ini;
+  if (regp->irqtype == IRQ_GPIO4)
+  {
+    regp->oldivaddr = _iocs_b_intvcs(0x46, inthandler_gpio4_asm);
+    *mfp_aeb |= 0x10;
+    *mfp_ierb |= 0x40;
+    *mfp_imrb |= 0x40;
+  }
+  else if (regp->irqtype == IRQ_TIMERA)
+  {
+    _iocs_vdispst(inthandler_timer_a_asm, 0, irq_count_ini);
+  }
+  else if (regp->irqtype == IRQ_TIMERC)
+  {
+    void **p = (void *)(0x45 * 4);
+    uint16_t sr;
+    sr = dp_irq_disable();
+    {
+      regp->oldivaddr = *p;
+      old_timer_c = *p;
+      *p = inthandler_timer_c_asm;
+    }
+    dp_irq_enable(sr);
+  }
 
   if (dp_inquiry(regp->target, &inquiry) == 0)
   {
@@ -518,6 +556,7 @@ static void etherfini(void)
 static int parse_cmdline(char *p, int issys)
 {
   _dos_print("X68000 DaynaPORT Ethernet driver version " GIT_REPO_VERSION "\r\n");
+  char c;
 
   if (issys) {
     while (*p++ != '\0')  // デバイスドライバ名をスキップする
@@ -534,17 +573,33 @@ static int parse_cmdline(char *p, int issys)
       p++;
       switch (tolower(*p++)) {
       case 't':
-        char c = *p++;
+        c = *p++;
         if (c >= '0' && c <= '7') {
           regp->trapno = c - '0';
         } else {
           return -1;
         }
         break;
+      case 'i':
+        c = *p++;
+        if (c >= '0' && c <= '2') {
+          regp->irqtype = c - '0';
+        } else {
+          return -1;
+        }
+        break;
+      case 'p':
+        c = *p++;
+        if (c >= '1' && c <= '8') {
+          irq_count_ini = c - '0';
+        } else {
+          return -1;
+        }
+        break;
       case 'd':
-        char d = *p++;
-        if (d >= '0' && d <= '7') {
-          regp->target = d - '0';
+        c = *p++;
+        if (c >= '0' && c <= '7') {
+          regp->target = c - '0';
         } else {
           return -1;
         }
@@ -612,6 +667,9 @@ void _start(void)
       "Options:\r\n"
       "  -t<trapno>\tネットワークインターフェースに使用するtrap番号を指定する(0~7)\r\n"
       "  -d<scsiid>\tDaynaPORTのSCSI IDを指定する(0~7)(デフォルトは7~0の順で検索)\r\n"
+      "  -i<type>\tポーリングに使用する割り込み種別の指定する\r\n"
+      "  \t\t(0:V-DISP(default),1:Timer-A,2:Timer-C)\r\n"
+      "  -p<count>\tパケットの受信ポーリング間隔を指定する(1~8)(default:4)\r\n"
       "  -r\t\t常駐しているdyptetherドライバがあれば常駐解除する\r\n"
     );
     _dos_exit2(1);
@@ -649,8 +707,27 @@ void _start(void)
     devh->next = olddev->next;
 
     // 割り込みベクタを元に戻す
-    //_iocs_b_intvcs(regp->ivect, regp->oldivaddr);
-    _iocs_vdispst(0, 0, 0);
+    if (regp->irqtype == IRQ_GPIO4)
+    {
+      *mfp_imrb &= 0xbf;
+      *mfp_ierb &= 0xbf;
+      *mfp_aeb &= 0xef;
+      _iocs_b_intvcs(0x46, regp->oldivaddr);
+    }
+    else if (regp->irqtype == IRQ_TIMERA)
+    {
+      _iocs_vdispst(0, 0, 0);
+    }
+    else if (regp->irqtype == IRQ_TIMERC)
+    {
+      void **p = (void *)(0x45 * 4);
+      uint16_t sr;
+      sr = dp_irq_disable();
+      {
+        *p = regp->oldivaddr;
+      }
+      dp_irq_enable(sr);
+    }
     _iocs_b_intvcs(0x20 + regp->trapno, regp->oldtrap);
     _dos_mfree((void *)olddev - 0xf0);
 

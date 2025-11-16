@@ -35,6 +35,10 @@
     .extern inthandler
     .extern regdata
 
+    .extern irq_count
+    .extern irq_count_ini
+    .extern old_timer_c
+
     .global devheader
 devheader:
     .long   -1                  // link pointer
@@ -69,12 +73,39 @@ trap_entry:
 
 /* interrupt handler entry */
 
-    .global inthandler_asm
-inthandler_asm:
+    .global inthandler_gpio4_asm
+inthandler_gpio4_asm:
+    sub.w   #1,irq_count
+    bne     1f
+    move.w  irq_count_ini,irq_count
+
+    movem.l %d0-%d7/%a0-%a6,%sp@-
+    bsr     inthandler
+    movem.l %sp@+,%d0-%d7/%a0-%a6
+
+1:
+    rte
+
+    .global inthandler_timer_a_asm
+inthandler_timer_a_asm:
     movem.l %d0-%d7/%a0-%a6,%sp@-
     bsr     inthandler
     movem.l %sp@+,%d0-%d7/%a0-%a6
     rte
+
+    .global inthandler_timer_c_asm
+inthandler_timer_c_asm:
+    sub.w   #1,irq_count
+    bne     1f
+    move.w  irq_count_ini,irq_count
+
+    movem.l %d0-%d7/%a0-%a6,%sp@-
+    bsr     inthandler
+    movem.l %sp@+,%d0-%d7/%a0-%a6
+
+1:
+    move.l  old_timer_c,%sp@-
+    rts
 
 /* device driver entry */
 
