@@ -36,9 +36,9 @@ CFLAGS = -g -m68000 -I. -Os -DGIT_REPO_VERSION=\"$(GIT_REPO_VERSION)\"
 CFLAGS += -I../include
 ASFLAGS = -m68000 -I.
 
-TARGETS = zusbether.x
-OBJS = head.o $(TARGETS:.x=.o) daynaport.c
-HEADERS = zusbether.h daynaport.h
+TARGETS = dyptether.x
+OBJS = head.o $(TARGETS:.x=.o) daynaport.o
+HEADERS = dyptether.h daynaport.h
 LDFLAGS = -nostartfiles -s
 LIBS =
 
@@ -59,7 +59,7 @@ $(TARGETS): $(OBJS)
 
 install: ../build
 	cp -p $(TARGETS) ../build/sys
-	cp -p README.md ../build/doc/zusbether.md
+	cp -p README.md ../build/doc/dyptether.md
 
 clean:
 	-rm -f $(TARGETS) $(OBJS) *.elf

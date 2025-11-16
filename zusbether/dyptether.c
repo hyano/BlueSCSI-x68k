@@ -38,7 +38,7 @@
 #include <x68k/dos.h>
 
 #include "daynaport.h"
-#include "zusbether.h"
+#include "dyptether.h"
 
 //****************************************************************************
 // Definition

@@ -25,8 +25,8 @@
  * THE SOFTWARE.
  */
 
-#ifndef _ZUSBETHER_H_
-#define _ZUSBETHER_H_
+#ifndef _DYPTETHER_H_
+#define _DYPTETHER_H_
 
 #include <stdint.h>
 
@@ -60,4 +60,4 @@ struct dos_dev_header {
 //****************************************************************************
 
 
-#endif /* _ZUSBETHER_H_ */
+#endif /* _DYPTETHER_H_ */
