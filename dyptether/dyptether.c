@@ -412,6 +412,7 @@ void inthandler(void)
   if (dp_is_free())
   {
     dp_recv(0x600, regp->target, &dyptbuf[DYPTBUF_RECV]);
+    dp_irq_enable(sr);
     int len = (dyptbuf[DYPTBUF_RECV+0] << 8) | dyptbuf[DYPTBUF_RECV+1];
 
     if (len >= 14 + 4)
@@ -423,7 +424,10 @@ void inthandler(void)
       }
     }
   }
-  dp_irq_enable(sr);
+  else
+  {
+    dp_irq_enable(sr);
+  }
 }
 
 //****************************************************************************
