@@ -40,7 +40,7 @@ DEVICE = dyptether.x <オプション>...
 正常に組み込まれると、以下のようなメッセージが表示されて TCP/IP ドライバから LAN アダプタが利用可能になります (xx:xx:xx:xx:xx:xx は認識した DaynaPORT の MAC アドレスです)。
 
 ```
-X68000 DynaPORT Ethernet driver version xxxxxxxx
+X68000 DaynaPORT Ethernet driver version xxxxxxxx
 DaynaPORT が利用可能です
   SCSI ID  : X
   VENDOR   : Dayna
@@ -68,7 +68,7 @@ TCP/IP ドライバ [TCPPACKA](http://retropc.net/x68000/software/internet/kg/tc
 
     ```
     A> dyptether
-    X68000 DynaPORT Ethernet driver version xxxxxxxx
+    X68000 DaynaPORT Ethernet driver version xxxxxxxx
     DaynaPORT が利用可能です
       SCSI ID  : X
       VENDOR   : Dayna

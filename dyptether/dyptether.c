@@ -517,7 +517,7 @@ static void etherfini(void)
 // コマンドラインパラメータを解析する
 static int parse_cmdline(char *p, int issys)
 {
-  _dos_print("X68000 DynaPORT Ethernet driver version " GIT_REPO_VERSION "\r\n");
+  _dos_print("X68000 DaynaPORT Ethernet driver version " GIT_REPO_VERSION "\r\n");
 
   if (issys) {
     while (*p++ != '\0')  // デバイスドライバ名をスキップする
