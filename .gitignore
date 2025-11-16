@@ -1,0 +1,11 @@
+*.o
+*.sys
+*.x
+*.elf
+*.fnc
+*.SYS
+*.bin
+*.xdf
+*.hds
+*.zip
+build/
