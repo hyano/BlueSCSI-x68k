@@ -33,7 +33,6 @@ OBJCOPY = $(CROSS)objcopy
 GIT_REPO_VERSION=$(shell git describe --tags --always)
 
 CFLAGS = -g -m68000 -I. -Os -DGIT_REPO_VERSION=\"$(GIT_REPO_VERSION)\"
-CFLAGS += -I../include
 ASFLAGS = -m68000 -I.
 
 TARGETS = dyptether.x
