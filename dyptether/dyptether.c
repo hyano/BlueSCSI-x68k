@@ -44,12 +44,12 @@
 // Definition
 //****************************************************************************
 
-// zusbbuf usage (0x000 - 0xf80)
-#define ZUSBBUF_TEMP        0x000   // 0x000 - 0x007
-#define ZUSBBUF_SEND        0x010   // 0x010 - 0x77f
-#define ZUSBBUF_SENDDATA    0x010
-#define ZUSBBUF_RECV        0x780   // 0x780 - 0xf7f
-#define ZUSBBUF_RECVDATA    0x786
+// dyptbuf usage (0x000 - 0xf80)
+#define DYPTBUF_TEMP        0x000   // 0x000 - 0x007
+#define DYPTBUF_SEND        0x010   // 0x010 - 0x77f
+#define DYPTBUF_SENDDATA    0x010
+#define DYPTBUF_RECV        0x780   // 0x780 - 0xf7f
+#define DYPTBUF_RECVDATA    0x786
 
 typedef void (*rcvhandler_t)(int len, uint8_t *buff, uint32_t flag);
 
@@ -86,7 +86,7 @@ extern void inthandler_asm(void);
 // Static variables
 //****************************************************************************
 
-static jmp_buf jenv;                      // ZUSB通信エラー時のジャンプ先
+static jmp_buf jenv;                      // DaynaPORT通信エラー時のジャンプ先
 static int inrecovery = false;            // 通信エラー回復中
 static int hotplug = false;               // USB接続状態が変化した
 static int sentpacket = false;            // 送信済みパケットがある
@@ -98,7 +98,7 @@ static struct {
   rcvhandler_t func;
 } proto_handler[N_PROTO_HANDLER];
 
-static uint8_t zusbbuf[0x1000];
+static uint8_t dyptbuf[0x1000];
 
 //****************************************************************************
 // for debugging
@@ -148,8 +148,8 @@ void DPRINTF(char *fmt, ...)
 // Utiility function
 //----------------------------------------------------------------------------
 
-// zusbetherが常駐しているかどうかを調べる
-static int find_zusbether(struct dos_dev_header **res)
+// dyptetherが常駐しているかどうかを調べる
+static int find_dyptether(struct dos_dev_header **res)
 {
   // Human68kからNULデバイスドライバを探す
   char *p = (char *)0x006800;
@@ -277,7 +277,7 @@ int etherfunc(int cmd, void *args)
   DPRINTF("etherfunc:%d %p\r\n", cmd, args);
 
   if (setjmp(jenv) != 0) {
-    DPRINTF("etherfunc error 0x%04x\r\n", zusb->err);
+    DPRINTF("etherfunc error\r\n");
     retry = true;
     inrecovery = true;
     hotplug = false;
@@ -303,14 +303,14 @@ int etherfunc(int cmd, void *args)
 
   // command 1: Get MAC addr
   case 1:
-    dp_stat(6, regp->target, &zusbbuf[ZUSBBUF_TEMP]);
-    memcpy(args, &zusbbuf[ZUSBBUF_TEMP], 6);
+    dp_stat(6, regp->target, &dyptbuf[DYPTBUF_TEMP]);
+    memcpy(args, &dyptbuf[DYPTBUF_TEMP], 6);
     return (int)args;
 
   // command 2: Get PROM addr
   case 2:
-    dp_stat(6, regp->target, &zusbbuf[ZUSBBUF_TEMP]);
-    memcpy(args, &zusbbuf[ZUSBBUF_TEMP], 6);
+    dp_stat(6, regp->target, &dyptbuf[DYPTBUF_TEMP]);
+    memcpy(args, &dyptbuf[DYPTBUF_TEMP], 6);
     return (int)args;
 
   // command 3: Set MAC addr
@@ -325,8 +325,8 @@ int etherfunc(int cmd, void *args)
       uint8_t *buf;
     } *sendpkt = args;
     int len = sendpkt->size;
-    memcpy(&zusbbuf[ZUSBBUF_SENDDATA], sendpkt->buf, sendpkt->size);
-    if (dp_send(len, regp->target, &zusbbuf[ZUSBBUF_SENDDATA]) != 0)
+    memcpy(&dyptbuf[DYPTBUF_SENDDATA], sendpkt->buf, sendpkt->size);
+    if (dp_send(len, regp->target, &dyptbuf[DYPTBUF_SENDDATA]) != 0)
     {
       DPRINTF("send error\r\n");
       longjmp(jenv, -1);
@@ -395,15 +395,15 @@ void inthandler(void)
   sr = dp_irq_disable();
   if (dp_is_free())
   {
-    dp_recv(0x600, regp->target, &zusbbuf[ZUSBBUF_RECV]);
-    int len = (zusbbuf[ZUSBBUF_RECV+0] << 8) | zusbbuf[ZUSBBUF_RECV+1];
+    dp_recv(0x600, regp->target, &dyptbuf[DYPTBUF_RECV]);
+    int len = (dyptbuf[DYPTBUF_RECV+0] << 8) | dyptbuf[DYPTBUF_RECV+1];
 
     if (len >= 14 + 4)
     {
-      int proto = *(uint16_t *)&zusbbuf[ZUSBBUF_RECVDATA + 12];
+      int proto = *(uint16_t *)&dyptbuf[DYPTBUF_RECVDATA + 12];
       rcvhandler_t func = find_proto_handler(proto);
       if (func) {
-        func(len - 4, &zusbbuf[ZUSBBUF_RECVDATA], *(uint32_t *)regp->ifname);
+        func(len - 4, &dyptbuf[DYPTBUF_RECVDATA], *(uint32_t *)regp->ifname);
       }
     }
   }
@@ -612,7 +612,7 @@ void _start(void)
       "Options:\r\n"
       "  -t<trapno>\tネットワークインターフェースに使用するtrap番号を指定する(0~7)\r\n"
       "  -d<scsiid>\tDynaPORTのSCSI IDを指定する(0~7)(デフォルトは7~0の順で検索)\r\n"
-      "  -r\t\t常駐しているzusbetherドライバがあれば常駐解除する\r\n"
+      "  -r\t\t常駐しているdyptetherドライバがあれば常駐解除する\r\n"
     );
     _dos_exit2(1);
   }
@@ -624,7 +624,7 @@ void _start(void)
      * 常駐解除処理
      */
     struct dos_dev_header *devh;
-    if (!find_zusbether(&devh)) {
+    if (!find_dyptether(&devh)) {
       _dos_print("ドライバは常駐していません\r\n");
       _dos_exit2(1);
     }
@@ -662,7 +662,7 @@ void _start(void)
    * 常駐処理
    */
   struct dos_dev_header *devh;
-  if (find_zusbether(&devh)) {
+  if (find_dyptether(&devh)) {
     _dos_print("ドライバが既に常駐しています\r\n");
     _dos_exit2(1);
   }
