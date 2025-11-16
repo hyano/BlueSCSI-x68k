@@ -34,6 +34,10 @@ DEVICE = dyptether.x <オプション>...
   ドライバが使用する trap 番号を 0 から 7 の値で指定します。デフォルトでは trap #0 から順番に未使用の trap 番号を検索し、空いているものを使用します。
 * `/d<scsi id>`\
   DaynaPORT の SCSI ID を 0 から 7 の値で指定します。デフォルトでは 7 から 0 順番に SCSI 機器を検索し、最初に見つけた DaynaPORT デバイスを使用します。
+* `/i<type>`\
+  ポーリングに使用する割り込み種別の指定します。(0:V-DISP(default),1:Timer-A,2:Timer-C)
+* `/p<count>`\
+  パケットの受信ポーリング間隔を指定します(1~8)(default:4)。
 * `/r`\
   常駐している dyptether.x を常駐解除します。CONFIG.SYS で登録されたドライバに対しては使用できません。
 
