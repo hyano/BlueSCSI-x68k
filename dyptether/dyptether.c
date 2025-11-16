@@ -611,7 +611,7 @@ void _start(void)
       "Usage: dyptether [Options]\r\n"
       "Options:\r\n"
       "  -t<trapno>\tネットワークインターフェースに使用するtrap番号を指定する(0~7)\r\n"
-      "  -d<scsiid>\tDynaPORTのSCSI IDを指定する(0~7)(デフォルトは7~0の順で検索)\r\n"
+      "  -d<scsiid>\tDaynaPORTのSCSI IDを指定する(0~7)(デフォルトは7~0の順で検索)\r\n"
       "  -r\t\t常駐しているdyptetherドライバがあれば常駐解除する\r\n"
     );
     _dos_exit2(1);
