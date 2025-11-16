@@ -1,4 +1,7 @@
 #
+# Copyright (c) 2025 Hirokuni Yano (@hyano)
+#
+# Based on zusbether.x
 # Copyright (c) 2025 Yuichi Nakamura (@yunkya2)
 #
 # The MIT License (MIT)
@@ -34,8 +37,8 @@ CFLAGS += -I../include
 ASFLAGS = -m68000 -I.
 
 TARGETS = zusbether.x
-OBJS = head.o $(TARGETS:.x=.o)
-HEADERS = zusbether.h
+OBJS = head.o $(TARGETS:.x=.o) daynaport.c
+HEADERS = zusbether.h daynaport.h
 LDFLAGS = -nostartfiles -s
 LIBS =
 

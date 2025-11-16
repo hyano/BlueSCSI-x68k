@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2025 Hirokuni Yano (@hyano)
+ *
+ * Based on zusbether.x
  * Copyright (c) 2025 Yuichi Nakamura (@yunkya2)
  *
  * The MIT License (MIT)
@@ -34,8 +37,7 @@
 #include <x68k/iocs.h>
 #include <x68k/dos.h>
 
-#include <zusb.h>
-
+#include "daynaport.h"
 #include "zusbether.h"
 
 //****************************************************************************
@@ -44,21 +46,10 @@
 
 // zusbbuf usage (0x000 - 0xf80)
 #define ZUSBBUF_TEMP        0x000   // 0x000 - 0x007
-#define ZUSBBUF_INTR        0x008   // 0x008 - 0x00f
 #define ZUSBBUF_SEND        0x010   // 0x010 - 0x77f
-#define ZUSBBUF_SENDDATA    0x014
+#define ZUSBBUF_SENDDATA    0x010
 #define ZUSBBUF_RECV        0x780   // 0x780 - 0xf7f
-#define ZUSBBUF_RECVDATA    0x784
-
-// endpoint
-#define EP_INTR             0
-#define EP_RECV             1
-#define EP_SEND             2
-
-typedef struct ax_packet_header {
-  uint16_t len;
-  uint16_t clen;
-} ax_packet_header_t;
+#define ZUSBBUF_RECVDATA    0x786
 
 typedef void (*rcvhandler_t)(int len, uint8_t *buff, uint32_t flag);
 
@@ -76,22 +67,17 @@ struct regdata {
   int removable;    // 0:CONFIG.SYSで登録された 1:Human68k起動後に登録された
   int ivect;        // 割り込みベクタ番号
   int trapno;       // 使用するtrap番号 (0-7)
-  int ch;           // ZUSB チャネル番号
+  int target;       // SCSIターゲットID
   int nproto;       // このインターフェースを使用するプロトコル数
-
-  uint16_t vid;     // USB Vendor ID
-  uint16_t pid;     // USB Product ID
-  uint8_t iProduct; // USB Product string index
 } regdata = {
   .ifname = "en0",
   .trapno = 0,
   .nproto = 0,
-  .vid = 0x0b95,
-  .pid = 0x7720,
+
+  .target = -1,
 };
 
 struct regdata *regp = &regdata;
-
 extern struct dos_dev_header devheader;
 extern void trap_entry(void);
 extern void inthandler_asm(void);
@@ -112,12 +98,7 @@ static struct {
   rcvhandler_t func;
 } proto_handler[N_PROTO_HANDLER];
 
-static zusb_endpoint_config_t epcfg[] = {
-    { ZUSB_DIR_IN,  ZUSB_XFER_INTERRUPT, 0 },
-    { ZUSB_DIR_IN,  ZUSB_XFER_BULK, 0 },
-    { ZUSB_DIR_OUT, ZUSB_XFER_BULK, 0 },
-    { 0, 0, -1 },
-};
+static uint8_t zusbbuf[0x1000];
 
 //****************************************************************************
 // for debugging
@@ -181,7 +162,7 @@ static int find_zusbether(struct dos_dev_header **res)
     char *p = devh->next->name;
     if (memcmp(p, "/dev/", 5) == 0 &&
         memcmp(p + 5, regp->ifname, 3) == 0 &&
-        memcmp(p + 8, "EthDZeth", 8) == 0) {
+        memcmp(p + 8, "EthDDyPT", 8) == 0) {
       *res = devh;
       return 1; // 常駐していた場合は一つ前のデバイスヘッダへのポインタを返す
     }
@@ -286,116 +267,6 @@ static int delete_proto_handler(int proto)
   return -1;    // not found
 }
 
-//----------------------------------------------------------------------------
-// AX88772 register access
-//----------------------------------------------------------------------------
-
-static void ax_cmd(int req, int cmd, int value, int index, int size, void *data)
-{
-  zusb_send_control(req, cmd, value, index, size, data);
-  if (zusb->stat & ZUSB_STAT_ERROR) {
-    DPRINTF("ax_cmd error\r\n");
-    longjmp(jenv, -1);
-  }
-}
-
-static void ax_cmd_read(int cmd, int value, int index, int size, void *data)
-{
-  ax_cmd(REQ_VD_IN, cmd, value, index, size, data);
-}
-
-static void ax_cmd_write(int cmd, int value, int index, int size, void *data)
-{
-  ax_cmd(REQ_VD_OUT, cmd, value, index, size, data);
-}
-
-static void ax_phy_write(int phyid, int reg, int val)
-{
-  *(uint16_t *)&zusbbuf[ZUSBBUF_TEMP] = val;
-  ax_cmd_write(AX_CMD_SET_SW_PHY, 0, 0, 0, NULL);
-  ax_cmd_write(AX_CMD_WRITE_PHY_REG, phyid, reg, 2, &zusbbuf[ZUSBBUF_TEMP]);
-  ax_cmd_write(AX_CMD_SET_HW_PHY, 0, 0, 0, NULL);
-}
-
-//----------------------------------------------------------------------------
-// AX88772 initialization
-//----------------------------------------------------------------------------
-
-static int ax_init(void)
-{
-  sentpacket = false;
-
-  // RSE|GPO_2|GPO2EN -- Reload EEPROM, GPIO2 OUT=1
-  ax_cmd_write(AX_CMD_WRITE_GPIOS, 0xb0, 0, 0, NULL);
-  msleep(10);
-
-  // PSEL=1 -- Select embedded Phy manually
-  ax_cmd_write(AX_CMD_SW_PHY_SELECT, 1, 0, 0, NULL);
-
-  // IPPD|PRL -- Internal Phy power down, External Phy reset=high
-  ax_cmd_write(AX_CMD_SW_RESET, 0x48, 0, 0, NULL);
-  msleep(15);
-  // 0 -- Internal Phy operation mode, External Phy reset=low
-  ax_cmd_write(AX_CMD_SW_RESET, 0x00, 0, 0, NULL);
-  msleep(15);
-  // IPRL -- Internal Phy operating state
-  ax_cmd_write(AX_CMD_SW_RESET, 0x20, 0, 0, NULL);
-  msleep(15);
-
-  // Rx Control clear
-  ax_cmd_write(AX_CMD_WRITE_RX_CTL, 0, 0, 0, NULL);
-
-  // PRL -- Internal Phy reset state, External Phy reset=high
-  ax_cmd_write(AX_CMD_SW_RESET, 0x08, 0, 0, NULL);
-  msleep(15);
-  // IPRL|PRL -- Internal Phy operating state, External Phy reset=high
-  ax_cmd_write(AX_CMD_SW_RESET, 0x28, 0, 0, NULL);
-  msleep(15);
-
-  // MII_BMCR = BMCR_RESET
-  ax_phy_write(0, 0x00, 0x8000);
-  // MII_ANAR = ALL|CSMA (default)
-  ax_phy_write(0, 0x04, 0x01e1);
-
-  return 0;
-}
-
-static int ax_fini(void)
-{
-  // IPPD|PRL -- Internal Phy power down, External Phy reset=high
-  ax_cmd_write(AX_CMD_SW_RESET, 0x48, 0, 0, NULL);
-  return 0;
-}
-
-static int ax_rx_init(int enable)
-{
-  zusb->inten = 0;
-
-  if (enable) {
-    // FD|RFC|TFC|PS|RE -- full duplex, RX/TX flow control, 100Mbps, Rx enable
-    ax_cmd_write(AX_CMD_WRITE_MEDIUM_MODE, 0x0336, 0, 0, NULL);
-    // SO|AB -- start operation, accept broadcast
-    ax_cmd_write(AX_CMD_WRITE_RX_CTL, 0x0088, 0, 0, NULL);
-
-    zusb_set_ep_region(1, &zusbbuf[ZUSBBUF_RECV], 2048);
-    zusb->stat = ZUSB_STAT_PCOMPLETE(EP_RECV) | ZUSB_STAT_HOTPLUG;
-    zusb->inten = ZUSB_STAT_PCOMPLETE(EP_RECV) | ZUSB_STAT_HOTPLUG;
-    zusb_send_cmd(ZUSB_CMD_SUBMITXFER(EP_RECV));
-#ifdef DEBUG_LINK_STATUS
-    zusb_set_ep_region(0, &zusbbuf[ZUSBBUF_INTR], 8);
-    zusb->stat = ZUSB_STAT_PCOMPLETE(EP_INTR);
-    zusb->inten |= ZUSB_STAT_PCOMPLETE(EP_INTR);
-    zusb_send_cmd(ZUSB_CMD_SUBMITXFER(EP_INTR));
-#endif
-  } else {
-    // FD|RFC|TFC|PS -- full duplex, RX/TX flow control, 100Mbps (Rx disable)
-    ax_cmd_write(AX_CMD_WRITE_MEDIUM_MODE, 0x0236, 0, 0, NULL);
-    // Rx Control clear
-    ax_cmd_write(AX_CMD_WRITE_RX_CTL, 0x0000, 0, 0, NULL);
-  }
-  return 0;
-}
-
 //****************************************************************************
 // Ether driver command handler
 //****************************************************************************
@@ -404,10 +275,8 @@ int etherfunc(int cmd, void *args)
 {
   int retry = false;
   DPRINTF("etherfunc:%d %p\r\n", cmd, args);
-  zusb_set_channel(regp->ch);
 
   if (setjmp(jenv) != 0) {
-    zusb_disconnect_device();
     DPRINTF("etherfunc error 0x%04x\r\n", zusb->err);
     retry = true;
     inrecovery = true;
@@ -420,17 +289,6 @@ int etherfunc(int cmd, void *args)
     }
 
     DPRINTF("error recovery\r\n");
-    int devid;
-    if ((devid = zusb_find_device_with_vid_pid(regp->vid, regp->pid, 0)) <= 0) {
-      return -1;
-    }
-    if (zusb_connect_device(devid, 1, 255, 255, 0, epcfg) <= 0) {
-      return -1;
-    }
-    ax_init();
-    if (regp->nproto > 0) {
-      ax_rx_init(true);
-    }
     inrecovery = false;
   }
 
@@ -445,22 +303,18 @@ int etherfunc(int cmd, void *args)
 
   // command 1: Get MAC addr
   case 1:
-    ax_cmd_read(AX_CMD_READ_NODE_ID, 0, 0, 6, &zusbbuf[ZUSBBUF_TEMP]);
+    dp_stat(6, regp->target, &zusbbuf[ZUSBBUF_TEMP]);
     memcpy(args, &zusbbuf[ZUSBBUF_TEMP], 6);
     return (int)args;
 
   // command 2: Get PROM addr
   case 2:
-    for (int i = 0; i < 3; i++) {
-      ax_cmd_read(AX_CMD_READ_SROM, 4 + i, 0, 2, &zusbbuf[ZUSBBUF_TEMP]);
-      ((uint16_t *)args)[i] = *(uint16_t *)&zusbbuf[ZUSBBUF_TEMP];
-    }
+    dp_stat(6, regp->target, &zusbbuf[ZUSBBUF_TEMP]);
+    memcpy(args, &zusbbuf[ZUSBBUF_TEMP], 6);
     return (int)args;
 
   // command 3: Set MAC addr
   case 3:
-    memcpy(&zusbbuf[ZUSBBUF_TEMP], args, 6);
-    ax_cmd_write(AX_CMD_WRITE_NODE_ID, 0, 0, 6, &zusbbuf[ZUSBBUF_TEMP]);
     return 0;
 
   // command 4: Send ether packet
@@ -470,44 +324,10 @@ int etherfunc(int cmd, void *args)
       int size;
       uint8_t *buf;
     } *sendpkt = args;
-
-    // 送信済みパケットがある場合は送信完了を待つ
-    while (sentpacket && !(zusb->stat & ZUSB_STAT_PCOMPLETE(EP_SEND))) {
-      if (zusb->stat & ZUSB_STAT_ERROR) {
-        DPRINTF("send error\r\n");
-        longjmp(jenv, -1);
-      }
-    }
-
     int len = sendpkt->size;
     memcpy(&zusbbuf[ZUSBBUF_SENDDATA], sendpkt->buf, sendpkt->size);
-    ax_packet_header_t *hdr = (ax_packet_header_t *)&zusbbuf[ZUSBBUF_SEND];
-    hdr->len = zusb_bswap16(len);
-    hdr->clen = hdr->len ^ 0xffff;
-    len += 4;
-    zusb_set_ep_region(2, &zusbbuf[ZUSBBUF_SEND], len);
-#ifdef DEBUG_SEND_PACKET_DUMP
-    DPRINTF("send len=%d\r\n", len);
-    for (int i = 0; i < len; i++) {
-      char buf[20];
-      if (i % 16 == 0) {
-        DPRINTF("%04x:", i);
-      }
-      uint8_t byte = zusbbuf[ZUSBBUF_SEND + i];
-        DPRINTF(" %02x", byte);
-        buf[i % 16] = isprint(byte) ? byte : '.';
-      if (i % 16 == 15) {
-        buf[16] = '\0';
-        DPRINTF("  %s\r\n", buf);
-      }
-    }
-    if (len % 16 != 0) {
-      DPRINTF("\r\n");
-    }
-#endif
-    zusb->stat = ZUSB_STAT_PCOMPLETE(EP_SEND) | ZUSB_STAT_ERROR;
-    zusb_send_cmd(ZUSB_CMD_SUBMITXFER(EP_SEND));
-    if (zusb->stat & ZUSB_STAT_ERROR) {
+    if (dp_send(len, regp->target, &zusbbuf[ZUSBBUF_SENDDATA]) != 0)
+    {
       DPRINTF("send error\r\n");
       longjmp(jenv, -1);
     }
@@ -527,7 +347,6 @@ int etherfunc(int cmd, void *args)
     DPRINTF("proto=0x%x handler=%p res=%d\r\n", setint->proto, setint->handler, res);
     if (res > 0) {
       DPRINTF("enable receiver\r\n");
-      ax_rx_init(true);
     }
     return 0;
   }
@@ -547,8 +366,6 @@ int etherfunc(int cmd, void *args)
     DPRINTF("proto=0x%x res=%d\r\n", proto, res);
     if (res > 0) {
       DPRINTF("disable receiver\r\n");
-      zusb_send_cmd(ZUSB_CMD_CANCELXFER(EP_RECV));
-      ax_rx_init(false);
     }
     return 0;   // not supported yet
   }
@@ -572,62 +389,25 @@ int etherfunc(int cmd, void *args)
 
 void inthandler(void)
 {
-  uint16_t stat = zusb->stat;
+  uint16_t sr;
+  if (dp_is_in_iocs()) return;
 
-  // USB接続状態が変化した
-  if (stat & ZUSB_STAT_HOTPLUG) {
-    DPRINTF("USB plug stat changed\r\n");
-    hotplug = true;
-    zusb->stat = ZUSB_STAT_HOTPLUG;
-  }
+  sr = dp_irq_disable();
+  if (dp_is_free())
+  {
+    dp_recv(0x600, regp->target, &zusbbuf[ZUSBBUF_RECV]);
+    int len = (zusbbuf[ZUSBBUF_RECV+0] << 8) | zusbbuf[ZUSBBUF_RECV+1];
 
-#ifdef DEBUG_LINK_STATUS
-  // ネットワークリンクの状態が変化した
-  if (stat & ZUSB_STAT_PCOMPLETE(EP_INTR)) {
-    static int prev;
-    if (prev != zusbbuf[ZUSBBUF_INTR + 2]) {
-      DPRINTF("Link stat changed: %02x\r\n", zusbbuf[ZUSBBUF_INTR + 2]);
-      prev = zusbbuf[ZUSBBUF_INTR + 2];
-    }
-    zusb->stat = ZUSB_STAT_PCOMPLETE(EP_INTR);
-    zusb_send_cmd(ZUSB_CMD_SUBMITXFER(EP_INTR));
-  }
-#endif
-
-  // 受信パケットが到着した
-  if (stat & ZUSB_STAT_PCOMPLETE(EP_RECV)) {
-    ax_packet_header_t *hdr = (ax_packet_header_t *)&zusbbuf[ZUSBBUF_RECV];
-    int len = zusb_bswap16(hdr->len);
-
-#ifdef DEBUG_RECV_PACKET_DUMP
-    DPRINTF("recv len=%d\r\n", len + 4);
-    for (int i = 0; i < len + 4; i++) {
-      char buf[20];
-      if (i % 16 == 0) {
-        DPRINTF("%04x:", i);
-      }
-      uint8_t byte = zusbbuf[ZUSBBUF_RECV + i];
-        DPRINTF(" %02x", byte);
-        buf[i % 16] = isprint(byte) ? byte : '.';
-      if (i % 16 == 15) {
-        buf[16] = '\0';
-        DPRINTF("  %s\r\n", buf);
+    if (len >= 14 + 4)
+    {
+      int proto = *(uint16_t *)&zusbbuf[ZUSBBUF_RECVDATA + 12];
+      rcvhandler_t func = find_proto_handler(proto);
+      if (func) {
+        func(len - 4, &zusbbuf[ZUSBBUF_RECVDATA], *(uint32_t *)regp->ifname);
       }
     }
-    if ((len + 4) % 16 != 0) {
-      DPRINTF("\r\n");
-    }
-#endif
-
-    int proto = *(uint16_t *)&zusbbuf[ZUSBBUF_RECV + 16];
-    rcvhandler_t func = find_proto_handler(proto);
-    if (func) {
-      func(len, &zusbbuf[ZUSBBUF_RECVDATA], *(uint32_t *)regp->ifname);
-    }
-
-    zusb->stat = ZUSB_STAT_PCOMPLETE(EP_RECV);
-    zusb_send_cmd(ZUSB_CMD_SUBMITXFER(EP_RECV));
   }
+  dp_irq_enable(sr);
 }
 
 //****************************************************************************
@@ -636,6 +416,8 @@ void inthandler(void)
 
 static int etherinit(void)
 {
+  static struct dp_inquiry_data inquiry;
+
   // 空いているtrap番号を探す
   regp->trapno = find_unused_trap(regp->trapno);
   if (regp->trapno < 0) {
@@ -646,84 +428,96 @@ static int etherinit(void)
   // インターフェース名を設定する
   memcpy(&devheader.name[5], regp->ifname, 3);
 
-  if ((regp->ch = zusb_open_protected()) < 0) {
-    _dos_print("ZUSB デバイスが見つかりません\r\n");
+  for (int target = 7; target >= 0; target--)
+  {
+    if (dp_inquiry(target, &inquiry) == 0)
+    {
+      if (dp_is_daynaport(&inquiry))
+      {
+        /* DaynaPORTデバイスを見つけた */
+        regp->target = target;
+        break;
+      }
+    }
+  }
+  if (regp->target < 0)
+  {
+    _dos_print("DaynaPORT デバイスが見つかりません\r\n");
     return -1;
   }
 
-  // チャネルが使用する割り込みベクタ番号を取得する
-  zusb_send_cmd(ZUSB_CMD_GETIVECT);
-  regp->ivect = zusb->param;
-
-  int devid;
-  if ((devid = zusb_find_device_with_vid_pid(regp->vid, regp->pid, 0)) <= 0) {
-    _dos_print("USB LANアダプタが見つかりません\r\n");
-    zusb_close();
-    return -1;
-  }
-
-  // 見つかったデバイスのプロダクトIDを得る
-  zusb_desc_device_t *ddev = (zusb_desc_device_t *)zusbbuf;
-  if (zusb_get_descriptor(zusbbuf) > 0 &&
-      ddev->bDescriptorType == ZUSB_DESC_DEVICE) {
-    regp->iProduct = ddev->iProduct;
-  }
-
-  if (zusb_connect_device(devid, 1, 255, 255, 0, epcfg) <= 0) {
-    _dos_print("USB LANアダプタに接続できません\r\n");
-    zusb_close();
+  if (dp_enable(regp->target, true) != 0)
+  {
+    _dos_print("DaynaPORT デバイスを初期化できませんでした\r\n");
     return -1;
   }
 
   if (setjmp(jenv) != 0) {
-    zusb_disconnect_device();
-    zusb_close();
+    dp_enable(regp->target, false);
     _dos_print("デバイスエラーが発生しました\r\n");
     return -1;
   }
 
-  ax_init();
-
   // 割り込みベクタを設定する
   regp->oldtrap = _dos_intvcs(0x20 + regp->trapno, trap_entry);
-  regp->oldivaddr = _dos_intvcs(regp->ivect, inthandler_asm);
+  //regp->oldivaddr = _dos_intvcs(regp->ivect, inthandler_asm);
+  _iocs_vdispst(inthandler_asm, 0, 4);
 
-  _dos_print("USB LANアダプタ(");
-  if (regp->iProduct) {
-    char product[256];
-    product[0] = '\0';
-    zusb_get_string_descriptor(product, sizeof(product), regp->iProduct);
-    _dos_print(product);
-    _dos_putchar(' ');
-  }
+  if (dp_inquiry(regp->target, &inquiry) == 0)
   {
-    uint8_t mac[6];
-    etherfunc(1, mac);
-    for (int i = 0; i < 6; i++) {
-      _dos_putchar("0123456789abcdef"[mac[i] >> 4]);
-      _dos_putchar("0123456789abcdef"[mac[i] & 0xf]);
-      if (i < 5) {
-        _dos_putchar(':');
+    _dos_print("DaynaPORT が利用可能です\r\n");
+    _dos_print("  SCSI ID  : ");
+    _dos_putchar("01234567"[regp->target & 0x07]);
+    _dos_print("\r\n");
+
+    {
+      char vendor[sizeof(inquiry.vendor) + 1];
+      memcpy(vendor, inquiry.vendor, sizeof(inquiry.vendor));
+      vendor[sizeof(inquiry.vendor)] = '\0';
+      _dos_print("  VENDOR   : ");
+      _dos_print(vendor);
+      _dos_print("\r\n");
+    }
+    {
+      char product[sizeof(inquiry.product) + 1];
+      memcpy(product, inquiry.product, sizeof(inquiry.product));
+      product[sizeof(inquiry.product)] = '\0';
+      _dos_print("  PRODUCT  : ");
+      _dos_print(product);
+      _dos_print("\r\n");
+    }
+    {
+      uint8_t mac[6];
+      etherfunc(1, mac);
+      _dos_print("  MAC ADDR : ");
+      for (int i = 0; i < 6; i++)
+      {
+        _dos_putchar("0123456789abcdef"[mac[i] >> 4]);
+        _dos_putchar("0123456789abcdef"[mac[i] & 0xf]);
+        if (i < 5)
+        {
+          _dos_putchar(':');
+        }
       }
+      _dos_print("\r\n");
     }
   }
-  _dos_print(")が利用可能です\r\n");
 
   return 0;
 }
 
 static void etherfini(void)
 {
-  zusb_set_channel(regp->ch);
-  ax_fini();
-  zusb_disconnect_device();
-  zusb_close();
+  if (regp->target > 0)
+  {
+    dp_enable(regp->target, false);
+  }
 }
 
 // コマンドラインパラメータを解析する
 static int parse_cmdline(char *p, int issys)
 {
-  _dos_print("X68000 Z USB Ethernet driver version " GIT_REPO_VERSION "\r\n");
+  _dos_print("X68000 DynaPORT Ethernet driver version " GIT_REPO_VERSION "\r\n");
 
   if (issys) {
     while (*p++ != '\0')  // デバイスドライバ名をスキップする
@@ -747,15 +541,16 @@ static int parse_cmdline(char *p, int issys)
           return -1;
         }
         break;
-      case 'r':
-        flag_r = true;
-        break;
-      case 'i':
-        regp->vid = hextoul(p, &p);
-        if (*p++ != ':') {
+      case 'd':
+        char d = *p++;
+        if (d >= '0' && d <= '7') {
+          regp->target = d - '0';
+        } else {
           return -1;
         }
-        regp->pid = hextoul(p, &p);
+        break;
+      case 'r':
+        flag_r = true;
         break;
       default:
         return -1;
@@ -813,10 +608,10 @@ void _start(void)
 
   if (parse_cmdline(cmdl, 0) < 0) {
     _dos_print(
-      "Usage: zusbether [Options]\r\n"
+      "Usage: dyptether [Options]\r\n"
       "Options:\r\n"
       "  -t<trapno>\tネットワークインターフェースに使用するtrap番号を指定する(0~7)\r\n"
-      "  -i<VID>:<PID>\t使用するUSB LANアダプタのVID:PIDを指定する (デフォルトは 0b95:7720)\r\n"
+      "  -d<scsiid>\tDynaPORTのSCSI IDを指定する(0~7)(デフォルトは7~0の順で検索)\r\n"
       "  -r\t\t常駐しているzusbetherドライバがあれば常駐解除する\r\n"
     );
     _dos_exit2(1);
@@ -854,7 +649,8 @@ void _start(void)
     devh->next = olddev->next;
 
     // 割り込みベクタを元に戻す
-    _iocs_b_intvcs(regp->ivect, regp->oldivaddr);
+    //_iocs_b_intvcs(regp->ivect, regp->oldivaddr);
+    _iocs_vdispst(0, 0, 0);
     _iocs_b_intvcs(0x20 + regp->trapno, regp->oldtrap);
     _dos_mfree((void *)olddev - 0xf0);
 
@@ -874,6 +670,7 @@ void _start(void)
   if (etherinit() < 0) {
     _dos_exit2(1);
   }
+  _dos_print("常駐します\r\n");
 
   // デバイスドライバのリンクを作成する
   devh->next = &devheader;

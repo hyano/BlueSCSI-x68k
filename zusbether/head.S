@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2025 Hirokuni Yano (@hyano)
+ *
+ * Based on zusbether.x
  * Copyright (c) 2025 Yuichi Nakamura (@yunkya2)
  *
  * The MIT License (MIT)
@@ -40,7 +43,7 @@ devheader:
     .long   interrupt_asm       // interrupt routine entry point
     .ascii  "/dev/en0"          // device driver name
     .ascii  "EthD"              // for etherlib.a
-    .ascii  "Zeth"              // driver name
+    .ascii  "DyPT"              // driver name
 
 /* superjsr call entry */
 

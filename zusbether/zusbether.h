@@ -1,4 +1,7 @@
 /*
+ * Copyright (c) 2025 Hirokuni Yano (@hyano)
+ *
+ * Based on zusbether.x
  * Copyright (c) 2025 Yuichi Nakamura (@yunkya2)
  *
  * The MIT License (MIT)
@@ -56,34 +59,5 @@ struct dos_dev_header {
 // Private structure definitions
 //****************************************************************************
 
-#define AX_CMD_SET_SW_PHY               0x06
-#define AX_CMD_READ_PHY_REG             0x07
-#define AX_CMD_WRITE_PHY_REG            0x08
-#define AX_CMD_SET_HW_PHY               0x0a
-#define AX_CMD_READ_SROM                0x0b
-#define AX_CMD_WRITE_SROM               0x0c
-#define AX_CMD_SROM_WRITE_ENABLE        0x0d
-#define AX_CMD_SROM_WRITE_DISABLE       0x0e
-#define AX_CMD_READ_RX_CTL              0x0f
-#define AX_CMD_WRITE_RX_CTL             0x10
-#define AX_CMD_READ_IPG                 0x11
-#define AX_CMD_WRITE_IPG                0x12
-#define AX_CMD_READ_NODE_ID             0x13
-#define AX_CMD_WRITE_NODE_ID            0x14
-#define AX_CMD_READ_MULTI_FILTER        0x15
-#define AX_CMD_WRITE_MULTI_FILTER       0x16
-#define AX_CMD_READ_PHY_ID              0x19
-#define AX_CMD_READ_MEDIUM_STATUS       0x1a
-#define AX_CMD_WRITE_MEDIUM_MODE        0x1b
-#define AX_CMD_READ_MONITOR_MODE        0x1c
-#define AX_CMD_WRITE_MONITOR_MODE       0x1d
-#define AX_CMD_READ_GPIOS               0x1e
-#define AX_CMD_WRITE_GPIOS              0x1f
-#define AX_CMD_SW_RESET                 0x20
-#define AX_CMD_SW_PHY_STATUS            0x21
-#define AX_CMD_SW_PHY_SELECT            0x22
-
-#define REQ_VD_IN       (ZUSB_REQ_DIR_IN|ZUSB_REQ_TYPE_VENDOR|ZUSB_REQ_RCPT_DEVICE)
-#define REQ_VD_OUT      (ZUSB_REQ_DIR_OUT|ZUSB_REQ_TYPE_VENDOR|ZUSB_REQ_RCPT_DEVICE)
 
 #endif /* _ZUSBETHER_H_ */
