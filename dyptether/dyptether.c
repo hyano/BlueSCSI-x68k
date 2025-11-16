@@ -104,7 +104,7 @@ void *old_timer_c;
 
 static jmp_buf jenv;                      // DaynaPORT通信エラー時のジャンプ先
 static int inrecovery = false;            // 通信エラー回復中
-static int hotplug = false;               // USB接続状態が変化した
+static int hotplug = false;               // 接続状態が変化した
 static int sentpacket = false;            // 送信済みパケットがある
 static int flag_r = false;                // 常駐解除フラグ
 
@@ -400,7 +400,7 @@ int etherfunc(int cmd, void *args)
 }
 
 //****************************************************************************
-// USB interrupt handler
+// Packet polling interrupt handler
 //****************************************************************************
 
 void inthandler(void)
